@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.n8n/
+*.log
+.npm-cache/
+tmp/
+*.sqlite*
+*.bak
+credentials*.json
+entrega/

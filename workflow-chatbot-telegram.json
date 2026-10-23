@@ -1,0 +1,299 @@
+{
+  "name": "Bot de clima no Telegram",
+  "description": "Autor: Almiro Breno de Moura. Desafio prático de bot de clima no Telegram com n8n.",
+  "nodes": [
+    {
+      "id": "0829e7d699d727042eb8fc81dfdae219",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "webhookId": "clima-telegram-webhook"
+    },
+    {
+      "id": "ce407ae1d28c1f9c62e54a7190b76c40",
+      "name": "Normalizar entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const msg = $json.message ?? {};\nconst text = typeof msg.text === 'string' ? msg.text.trim().replace(/\\s+/g, ' ') : '';\nconst partes = text.split(',').map(s => s.trim());\nconst cidade = partes[0] || '';\nconst normalizar = s => s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();\nconst ufs = 'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' ');\nconst formato = partes.length === 1 ||\n  (partes.length === 2 && (ufs.includes(partes[1].toUpperCase()) || partes[1].toUpperCase() === 'BR')) ||\n  (partes.length === 3 && ufs.includes(partes[1].toUpperCase()) && partes[2].toUpperCase() === 'BR');\n// Restringe consultas ao Brasil quando o usuário informa somente a cidade/UF.\nconst consulta = partes.length === 1 || (partes.length === 2 && partes[1].toUpperCase() !== 'BR') ? [...partes, 'BR'] : partes;\nconst queue = normalizar(consulta.join(','));\nconst valid = Boolean(/^[\\p{L}][\\p{L} .'-]*$/u.test(cidade) && cidade.length <= 100 && formato && msg.chat?.id && !text.startsWith('/'));\nreturn [{ json: { queue, originalInput: text, displayCity: cidade, chatId: msg.chat?.id, valid } }];"
+      }
+    },
+    {
+      "id": "f7ba3333b81c01bedf480971c7bae283",
+      "name": "Entrada válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "entrada-valida",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8ce6b9c29a2b548f46e9c10f3d446c27",
+      "name": "Consultar OpenWeather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -120
+      ],
+      "parameters": {
+        "url": "https://api.openweathermap.org/data/2.5/weather",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.queue }}"
+            },
+            {
+              "name": "units",
+              "value": "metric"
+            },
+            {
+              "name": "lang",
+              "value": "pt_br"
+            },
+            {
+              "name": "appid",
+              "value": "={{ $env.OPENWEATHER_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "215346364a0d6c2ac6c40628b1cb5499",
+      "name": "Interpretar resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Normalizar entrada').first().json;\nconst res = $json ?? {};\nconst body = res.body && typeof res.body === 'object' ? res.body : res;\nconst status = Number(res.statusCode ?? body.cod ?? (res.error ? 0 : 200));\nconst temp = body.main?.temp;\nconst apiStatus = Number(body.cod ?? status);\nconst ok = !res.error && status >= 200 && status < 300 && apiStatus >= 200 && apiStatus < 300 && typeof temp === 'number' && Number.isFinite(temp);\nconst message = ok\n  ? '🌤️ A temperatura em ' + input.displayCity + ' é de ' + Math.round(temp) + '°C.'\n  : status === 404\n    ? '❌ Cidade não encontrada. Use o formato Cidade,UF,BR (ex.: São Paulo,SP,BR).'\n    : '⚠️ Não foi possível consultar o clima agora. Tente novamente mais tarde.';\nreturn [{json: {chatId: input.chatId, ok, message}}];"
+      }
+    },
+    {
+      "id": "517e4cf2e0c5a6901d1ab961fab0c1a5",
+      "name": "Resposta válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "resposta-valida",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a6dfc9a0278071046ade750ea77f61ff",
+      "name": "Enviar temperatura",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        -220
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      }
+    },
+    {
+      "id": "4e97f6dd6101e11a422de36a1f824fc6",
+      "name": "Enviar erro de consulta",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        -20
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      }
+    },
+    {
+      "id": "e753bb28e00183c68fca427a29f3e175",
+      "name": "Enviar orientação",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "❌ Cidade não encontrada. Use o formato Cidade,UF,BR (ex.: São Paulo,SP,BR).",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalizar entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar entrada": {
+      "main": [
+        [
+          {
+            "node": "Entrada válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada válida?": {
+      "main": [
+        [
+          {
+            "node": "Consultar OpenWeather",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar orientação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar OpenWeather": {
+      "main": [
+        [
+          {
+            "node": "Interpretar resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar resposta": {
+      "main": [
+        [
+          {
+            "node": "Resposta válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta válida?": {
+      "main": [
+        [
+          {
+            "node": "Enviar temperatura",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar erro de consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
