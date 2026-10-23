@@ -1,17 +1,17 @@
 # Bot de clima no Telegram com n8n
 
 **Autor: Almiro Breno de Moura**  
-Desafio prático de Agentes e Automação — Rocketseat.
+Desafio prático — Agentes e Automação, Rocketseat.
 
-Chatbot que recebe uma cidade brasileira pelo Telegram, consulta a temperatura atual no OpenWeather e responde em português brasileiro. A resposta é determinística, sem Gemini e sem dependências de IA.
+Chatbot que recebe o nome de uma cidade brasileira no Telegram, consulta a API OpenWeather e devolve uma mensagem curta em português com a temperatura atual, arredondada e em °C. A implementação é determinística e não utiliza Gemini.
 
-## Entrega
+## Arquivos
 
-Os arquivos obrigatórios estão na raiz: **`workflow-chatbot-telegram.json`** e **`README.md`**. Também são fornecidos Docker Compose, exemplo de ambiente, scripts de teste e [registro de validação](VALIDACAO.md).
+- **`workflow-chatbot-telegram.json`**: workflow exportável/importável no n8n, sem tokens ou credenciais locais.
+- **`README.md`**: descrição, configuração, importação e execução.
+- **`docker-compose.yml`**: arquivo opcional de execução local com Docker, conforme permitido no desafio.
 
-O PDF apresenta dois nomes para o JSON; foi adotado `workflow-chatbot-telegram.json`, usado na seção Entrega e nas instruções finais de exportação.
-
-## Fluxo
+## Fluxo do chatbot
 
 ```text
 Telegram Trigger → Normalizar entrada → Entrada válida?
@@ -21,128 +21,122 @@ Telegram Trigger → Normalizar entrada → Entrada válida?
       └─ Não → Enviar erro de consulta
 ```
 
-A normalização mantém `queue`, `originalInput`, `displayCity` e `chatId`. Remove espaços extras e acentos, normaliza minúsculas e verifica o formato. O nome informado é preservado para a resposta. O chat de destino é sempre obtido da mensagem recebida.
+O nó de normalização captura `message.text` e `message.chat.id`. Mantém `queue`, `originalInput`, `displayCity` e `chatId`, remove espaços excedentes, normaliza acentos e minúsculas e verifica o formato. Mensagens sem texto, comandos e entradas inválidas recebem orientação.
+
+O HTTP Request permite avaliar respostas de erro sem interromper o fluxo. A interpretação aceita resposta direta ou completa (`body`/`statusCode`), verifica status e temperatura numérica e trata falhas de rede ou payload inválido. O destino Telegram sempre vem do `chatId` recebido.
 
 ## Pré-requisitos
 
 - n8n **2.44.6**, versão utilizada nos testes de importação e execução.
-- Docker Desktop/Compose com containers Linux para usar o ambiente fornecido; no Windows, WSL 2 configurado.
-- Node.js 24 ou superior para os scripts auxiliares. Não é necessário instalar pacotes npm.
-- Bot Telegram criado com [@BotFather](https://t.me/BotFather).
-- Chave da API Current Weather do [OpenWeather](https://home.openweathermap.org/api_keys).
-- URL HTTPS pública para o webhook; o Telegram não alcança `localhost` diretamente.
+- Um bot Telegram criado no BotFather e seu token.
+- Uma chave OpenWeather para a API Current Weather.
+- Uma URL HTTPS pública para o webhook. `localhost` sozinho não é acessível pelo Telegram.
+- Docker Desktop/Compose com containers Linux, caso use o Compose fornecido. No Windows, configure WSL 2 e virtualização.
 
-## Executar localmente
+## 1. Criar o bot e obter `TELEGRAM_BOT_TOKEN`
 
-Na pasta do projeto, com Docker Desktop iniciado:
+1. Abra o Telegram e procure o perfil oficial [@BotFather](https://t.me/BotFather).
+2. Toque em **Iniciar** e envie `/newbot`.
+3. Escolha um nome e um nome de usuário disponível terminado em `bot`.
+4. Guarde o token recebido: esse é o valor chamado **`TELEGRAM_BOT_TOKEN`** no desafio.
+
+No n8n, crie uma credencial **Telegram API** e cole o token em **Access Token**. O token fica no mecanismo de credenciais do n8n, não no JSON. A variável `TELEGRAM_BOT_TOKEN` não cria essa credencial automaticamente e não precisa ser enviada ao container.
+
+## 2. Obter `OPENWEATHER_API_KEY`
+
+Crie uma conta no [OpenWeather](https://home.openweathermap.org/users/sign_up), confirme seu e-mail e copie a chave em [API Keys](https://home.openweathermap.org/api_keys). Chaves novas podem levar algum tempo para ativar; HTTP 401 também pode indicar chave incorreta.
+
+A chave deve estar na variável de ambiente **`OPENWEATHER_API_KEY`** do processo/container n8n. Não cole o valor diretamente no nó HTTP Request.
+
+## 3. Executar o n8n localmente
+
+Se já possui uma instância n8n própria, configure a variável no ambiente dessa instância e siga para a importação.
+
+Para usar Docker no Windows, inicie o Docker Desktop. Abra o PowerShell na pasta do projeto e configure a chave sem mostrá-la na tela:
 
 ```powershell
-node ambiente.cjs preparar
-node verificar.cjs
+$chaveOpenWeather = Read-Host 'Chave OpenWeather' -AsSecureString
+$env:OPENWEATHER_API_KEY = [System.Net.NetworkCredential]::new('', $chaveOpenWeather).Password
+$env:WEBHOOK_URL = 'https://seu-endereco-publico/'
+docker compose up -d
 ```
 
-O primeiro comando cria `.env` somente se ele não existir. Edite esse arquivo e configure:
+Substitua `WEBHOOK_URL` pela URL HTTPS pública real, terminada em `/`. O Compose repassa esse valor ao n8n como `N8N_WEBHOOK_URL`. Abra <http://localhost:5678> e crie sua conta local.
 
-```env
-OPENWEATHER_API_KEY=coloque_sua_chave_aqui
-```
-
-Inicie o ambiente:
+Para obter uma URL temporária de teste, instale o [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/) e execute em outro terminal:
 
 ```powershell
-node ambiente.cjs iniciar
+cloudflared tunnel --url http://localhost:5678
 ```
 
-O comando inicia o n8n e um túnel temporário Cloudflare, grava `WEBHOOK_URL` no `.env` e aplica o endereço ao container como `N8N_WEBHOOK_URL`. O proxy encaminha apenas `/webhook/` e `/webhook-test/`. Abra <http://localhost:5678> e crie sua conta local.
+Copie o endereço HTTPS exibido para `$env:WEBHOOK_URL` e aplique a configuração com `docker compose up -d --force-recreate`. Mantenha o terminal do túnel aberto. Esse modo encaminha o serviço local pela URL pública: use-o somente em ambiente de teste com sua conta n8n configurada. Para uso contínuo, configure um endereço estável e controle de acesso ao editor.
 
-Alternativa com túnel próprio: configure `WEBHOOK_URL=https://seu-endereco-publico/` no `.env`, execute `docker compose up -d` e encaminhe o túnel para a porta local 5678. Os scripts de túnel fornecidos são opcionais. Mais detalhes em [TESTAR-AQUI.md](TESTAR-AQUI.md).
+O Compose define `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir a expressão `$env` exigida no exercício. Use uma instância controlada: quem pode editar workflows pode acessar variáveis do processo.
 
-O Compose usa `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir a expressão `$env` exigida no desafio. Use uma instância controlada: usuários que editam workflows podem ler variáveis de ambiente.
+Para parar: `docker compose down`. O volume `n8n_data` preserva os dados e as credenciais. Nunca publique esse volume ou seus backups.
 
-## Telegram: criar o bot e configurar a credencial
+## 4. Importar e ativar
 
-1. No Telegram, abra o perfil oficial [@BotFather](https://t.me/BotFather), toque em **Iniciar** e envie `/newbot`.
-2. Escolha o nome e um nome de usuário disponível terminado em `bot`.
-3. Guarde o token recebido: esse é o valor chamado **`TELEGRAM_BOT_TOKEN`** no desafio.
-4. No n8n, crie uma credencial **Telegram API** e cole o token em **Access Token**.
+1. No editor n8n, crie um workflow e use **Import from File** para importar **`workflow-chatbot-telegram.json`**.
+2. Selecione a credencial Telegram nos quatro nós: **Telegram Trigger**, **Enviar temperatura**, **Enviar erro de consulta** e **Enviar orientação**.
+3. Confirme que `OPENWEATHER_API_KEY` está disponível no ambiente do n8n. Se alterou a variável após iniciar, recrie/reinicie o container para aplicá-la.
+4. Salve e **publique/ative** o workflow. O JSON público é distribuído inativo e sem vínculos à credencial usada nos testes.
+5. No celular, abra o link do seu bot fornecido pelo BotFather, toque em **Iniciar** e envie uma cidade.
 
-O token fica nas credenciais do n8n, não no JSON. Não é necessário colocá-lo no `.env`; definir a variável `TELEGRAM_BOT_TOKEN`, isoladamente, não cria a credencial no n8n.
+Cada bot possui um único webhook. Não use o mesmo bot em duas instâncias simultâneas. O modo de teste pode substituir o webhook de produção; após usá-lo ou alterar a URL, despublique e publique novamente o workflow.
 
-## OpenWeather: obter e configurar a chave
+## `queue` e o parâmetro `q`
 
-Crie sua conta no [OpenWeather](https://home.openweathermap.org/users/sign_up), confirme o e-mail e copie a chave na seção [API Keys](https://home.openweathermap.org/api_keys). Salve-a somente em `OPENWEATHER_API_KEY` no `.env` local. Chaves novas podem demorar a ativar; HTTP 401 também pode indicar chave incorreta.
+O enunciado menciona `queue`. O workflow cria essa propriedade interna, mas envia seu conteúdo pelo parâmetro **`q`**, nome aceito pela API OpenWeather. Exemplo: `São Paulo, SP, BR` gera `queue = sao paulo,sp,br`.
 
-Após alterar `.env`, execute `node ambiente.cjs iniciar` para aplicar a configuração ao container. Em uma instalação n8n existente, configure a variável no ambiente do processo/servidor e reinicie-o conforme sua instalação.
+O nó HTTP Request usa `https://api.openweathermap.org/data/2.5/weather`, com **Send Query Parameters** habilitado:
 
-## Importar e ativar
-
-1. No editor do n8n, crie um workflow e use **Import from File** para importar `workflow-chatbot-telegram.json`.
-2. Selecione a mesma credencial Telegram em **Telegram Trigger**, **Enviar temperatura**, **Enviar erro de consulta** e **Enviar orientação**.
-3. Confirme a variável `OPENWEATHER_API_KEY` no ambiente do n8n.
-4. Salve e **publique/ative** o workflow. O JSON público é distribuído inativo e sem vínculos à credencial da instalação de teste.
-5. Abra seu bot no celular, toque em **Iniciar** e envie uma cidade.
-
-Cada bot tem um único webhook. Não use o mesmo bot em duas instâncias simultâneas. O modo de teste pode substituir o webhook de produção; após usá-lo ou alterar a URL, despublique e publique o workflow novamente.
-
-## Campo `queue` e parâmetro `q`
-
-O enunciado menciona `queue`. O workflow cria essa propriedade interna, mas envia seu valor pelo parâmetro **`q`**, aceito pela API OpenWeather. `São Paulo, SP, BR` gera `queue = sao paulo,sp,br`.
-
-O nó HTTP Request usa `https://api.openweathermap.org/data/2.5/weather`, com envio de parâmetros habilitado:
-
-| Parâmetro | Valor no workflow |
+| Parâmetro | Valor |
 | --- | --- |
 | `q` | `={{ $json.queue }}` |
 | `units` | `metric` |
 | `lang` | `pt_br` |
 | `appid` | `={{ $env.OPENWEATHER_API_KEY }}` |
 
-Também são aceitos `São Paulo` e `São Paulo,SP`, com acréscimo de `BR`. Campos vazios entre vírgulas, UF inválida, país diferente de `BR`, comandos e mensagens sem texto recebem orientação antes da consulta.
+Também são aceitos `São Paulo` e `São Paulo,SP`, com acréscimo de `BR`. Campos vazios entre vírgulas, UF inválida e país diferente de `BR` recebem orientação antes da consulta.
 
-## Exemplos de uso
+## Exemplos e checklist de teste
 
-| Mensagem | Resposta esperada |
+Envie cada mensagem separadamente ao bot e confira a execução no n8n:
+
+| Entrada | Resultado esperado |
 | --- | --- |
 | `São Paulo,SP,BR` | `🌤️ A temperatura em São Paulo é de XX°C.` |
 | `Rio de Janeiro,RJ,BR` | Temperatura atual do Rio de Janeiro em °C |
 | `Belo Horizonte,MG,BR` | Temperatura atual de Belo Horizonte em °C |
 | `CidadeInexistenteXYZ,SP,BR` | `❌ Cidade não encontrada. Use o formato Cidade,UF,BR (ex.: São Paulo,SP,BR).` |
-| `/start`, mensagem sem texto ou `São Paulo,,BR` | Orientação de formato |
+| `CidadeInexistente,XX,BR`, `/start` ou `São Paulo,,BR` | Orientação de formato |
+| Mensagem sem texto | Orientação de formato |
 
-`XX` é apenas ilustrativo. A temperatura vem da API e é arredondada. Respostas HTTP de erro são avaliadas pelo fluxo; falhas de rede, chave inválida e payload inesperado recebem mensagem de indisponibilidade, sem expor detalhes técnicos.
+`XX` na resposta de sucesso é apenas ilustrativo: a temperatura vem da API e varia. Use uma UF válida no nome inexistente para testar o HTTP 404; `XX` é rejeitado antes da consulta. O Telegram não permite enviar texto realmente vazio; esse caso pode ser validado com dados simulados no nó de normalização.
 
-## Testes
+Confirme também que a resposta chega ao mesmo chat e não contém dados técnicos. Falhas de rede, chave inválida e respostas inesperadas recebem mensagem de indisponibilidade, sem expor a chave ou o payload.
 
-```powershell
-node verificar.cjs       # Sintaxe, estrutura, parâmetros e lógica
-node teste-n8n.cjs       # Oito cenários simulados no motor real do n8n
-node ambiente.cjs api    # Consultas reais com a chave do .env
-```
+## Validação realizada
 
-Foram verificados JSON, importação no n8n, oito cenários simulados, consultas reais às três cidades e cidade inexistente. O fluxo recebeu mensagens reais e executou os nós de envio; o autor confirmou o recebimento no celular. O [registro de validação](VALIDACAO.md) distingue os testes simulados dos testes reais.
+- JSON e estrutura dos nós conferidos; importação real no n8n 2.44.6 bem-sucedida.
+- Oito cenários simulados passaram no motor n8n: três cidades, cidade inexistente, mensagem sem texto, formato inválido, falha de rede e resposta inválida.
+- Consultas reais à API retornaram HTTP 200 para São Paulo (19°C), Rio de Janeiro (23°C) e Belo Horizonte (22°C), e HTTP 404 para cidade inexistente. São registros pontuais arredondados, não temperaturas fixas.
+- O fluxo recebeu mensagens reais e concluiu envios de orientação, temperatura e erro de consulta. O autor confirmou o recebimento no celular.
 
-Para regenerar o JSON após editar o código: `node gerar-workflow.cjs`. O verificador confere que JSON e gerador correspondem.
+Os testes das três cidades foram feitos individualmente na API real e no fluxo simulado. A confirmação de recebimento no celular comprova o teste integrado, sem afirmar que as três cidades foram enviadas pelo celular.
 
-## Limitações e diagnóstico
+## Limitações
 
-- O computador, Docker e túnel precisam permanecer funcionando para o ambiente local responder.
-- Quick Tunnels são temporários e não oferecem disponibilidade garantida. Se o endereço deixar de resolver: `node ambiente.cjs renovar`, depois despublique/publique o workflow. Essa falha foi identificada e corrigida no teste integrado.
-- A busca por nome pode ser ambígua para cidades homônimas. A API documenta busca por estado apenas para os EUA; as três consultas brasileiras exigidas passaram, mas isso não garante desambiguação de todas as cidades.
-- Telegram não permite enviar texto realmente vazio; esse caso foi validado com dados simulados.
-- Diagnóstico: `node ambiente.cjs diagnostico` e `node ambiente.cjs logs`. Revise logs antes de compartilhar.
-- Encerramento: `node ambiente.cjs parar`. O volume Docker preserva os dados e as credenciais locais.
+- O computador, n8n e túnel precisam permanecer funcionando no ambiente local.
+- Quick Tunnels são temporários e não garantem disponibilidade. Se o Telegram deixar de receber mensagens, confira `getWebhookInfo`, renove o túnel e registre novamente o webhook. Uma falha de DNS desse tipo foi identificada e corrigida nos testes.
+- A busca por nome pode ser ambígua para cidades homônimas. A documentação da API limita a busca por estado aos EUA; as três consultas brasileiras passaram, mas isso não garante desambiguação de todas as cidades.
+- O bot funciona sem chave ou credencial Gemini.
 
-## Autoria e referências técnicas
+## Autoria, referências e segurança
 
-Projeto de **Almiro Breno de Moura**. Não houve cópia de código ou workflows de outros projetos. Referências dos serviços utilizados:
+Projeto de **Almiro Breno de Moura**. Não houve cópia de código ou workflows de outros projetos. Referências técnicas: [n8n](https://docs.n8n.io/), [OpenWeather Current Weather](https://openweathermap.org/api/current) e [Telegram Bot API](https://core.telegram.org/bots/api).
 
-- [Documentação do n8n](https://docs.n8n.io/)
-- [API Current Weather — OpenWeather](https://openweathermap.org/api/current)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
+O PDF apresenta dois nomes para o JSON; foi usado **`workflow-chatbot-telegram.json`**, conforme a seção Entrega e as orientações finais de exportação.
 
-## Repositório e segurança
-
-O repositório público indicado pelo autor é [Breno1974/rocketseat_chatbot-telegram_Almiro](https://github.com/Breno1974/rocketseat_chatbot-telegram_Almiro). Os arquivos obrigatórios foram preparados para a raiz desse repositório. O PDF orienta o nome literal `chatbot-telegram`; o nome escolhido pelo autor inclui um prefixo e um sufixo. Se a avaliação exigir correspondência exata, será necessário ajustar o nome.
-
-**Nunca versione `.env`, tokens, chaves, bancos n8n, credenciais exportadas, logs ou dados pessoais de conversas.** `.env.example` contém somente exemplos. Cada avaliador deve configurar suas próprias credenciais após importar o JSON.
+**Nenhum segredo deve ser versionado.** Não envie tokens, chaves, arquivos `.env`, bancos do n8n, credenciais exportadas, logs ou dados pessoais de conversas ao GitHub. Cada avaliador configura suas próprias credenciais após importar o workflow.
